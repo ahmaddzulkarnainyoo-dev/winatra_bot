@@ -9,8 +9,7 @@ Mode: Webhook (siap deploy ke Railway)
 
 import logging
 import os
-import re
-from dotenv import load_dotenv
+import asyncio
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -19,18 +18,14 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import asyncio
 
-# ========== KONFIGURASI ENVIRONMENT ==========
-load_dotenv()
+# ========== KONFIGURASI ENVIRONMENT (LANGSUNG DARI RAILWAY) ==========
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", "-1004250133633"))
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "-1004250133633"))
-
-# Konfigurasi untuk webhook (Railway akan memberikan variabel ini otomatis)
+# Konfigurasi webhook dari Railway
 PORT = int(os.environ.get("PORT", 8080))
 RAILWAY_PUBLIC_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
-# Webhook URL akan dibentuk dari domain Railway
 WEBHOOK_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}/webhook" if RAILWAY_PUBLIC_DOMAIN else ""
 
 # ========== LOGGING ==========
@@ -160,7 +155,7 @@ Contoh:
 Tim admin akan membalas pesan Anda melalui bot ini. Identitas admin tetap anonim! 🔒""",
 }
 
-# ========== FUNGSI-FUNGSI HANDLER ==========
+# ========== HANDLER PERINTAH ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user_context[user_id] = {"state": "idle"}
@@ -211,13 +206,11 @@ Bot ini adalah first line support. Jika masalah tidak terselesaikan, kami akan m
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def carapakai_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    user_context[user_id] = {"state": "idle"}
+    user_context[update.effective_user.id] = {"state": "idle"}
     await update.message.reply_text(ANSWERS["cara_pakai"], parse_mode="Markdown")
 
 async def donasi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    user_context[user_id] = {"state": "idle"}
+    user_context[update.effective_user.id] = {"state": "idle"}
     await update.message.reply_text(ANSWERS["donasi"], parse_mode="Markdown")
 
 async def error_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -252,8 +245,8 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_context[user_id] = {"state": "contacted_admin"}
     await update.message.reply_text(ANSWERS["admin_help"], parse_mode="Markdown")
 
+# ========== ADMIN ANONIM HANDLER ==========
 async def admin_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Menangani pesan yang dimulai dengan @admin atau /adminchat"""
     user_id = update.effective_user.id
     user_text = update.message.text
     username = update.effective_user.username or "tanpa username"
@@ -281,13 +274,12 @@ async def admin_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         admin_message = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=forward_text, parse_mode="Markdown")
         forwarded_map[admin_message.message_id] = user_id
         await update.message.reply_text("✅ Pesan Anda telah dikirim ke tim support.\n\nTim admin akan membalas dalam waktu segera. Tunggu balasan melalui bot ini! 🙏", parse_mode="Markdown")
-        logger.info(f"Pesan admin dari user {user_id} dikirim ke grup admin")
+        logger.info(f"Pesan dari user {user_id} dikirim ke grup admin")
     except Exception as e:
         logger.error(f"Gagal mengirim pesan ke grup admin: {e}")
         await update.message.reply_text("❌ Maaf, terjadi error saat mengirim pesan. Silakan coba lagi.", parse_mode="Markdown")
 
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Menangani balasan admin di grup internal."""
     if update.message.chat_id != ADMIN_GROUP_ID:
         return
     if not update.message.reply_to_message:
@@ -297,7 +289,7 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     admin_reply_text = update.message.text
 
     if replied_to_msg_id not in forwarded_map:
-        logger.info("Reply di grup admin tapi bukan untuk pesan forward user. Abaikan.")
+        logger.info("Reply di grup admin bukan untuk pesan forward user. Abaikan.")
         return
 
     user_id = forwarded_map[replied_to_msg_id]
@@ -312,8 +304,8 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Gagal mengirim balasan ke user {user_id}: {e}")
 
+# ========== HANDLER PESAN TEKS BIASA ==========
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Menangani pesan teks biasa (keyword matching)."""
     if update.message.chat_id == ADMIN_GROUP_ID:
         return
 
@@ -371,15 +363,16 @@ Atau langsung ketik pertanyaan Anda dengan detail! 😊"""
     if response:
         await update.message.reply_text(response, parse_mode="Markdown")
 
+# ========== ERROR HANDLER ==========
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Update {update} caused error {context.error}")
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text("Maaf, terjadi kesalahan. Silakan coba lagi atau ketik /help")
 
-# ========== MAIN (WEBHOOK) ==========
+# ========== MAIN WEBHOOK ==========
 async def main() -> None:
     if not BOT_TOKEN:
-        logger.error("❌ ERROR: BOT_TOKEN tidak ditemukan di file .env")
+        logger.error("❌ ERROR: BOT_TOKEN tidak ditemukan. Pastikan variabel environment BOT_TOKEN sudah diatur di Railway.")
         return
     if not WEBHOOK_URL:
         logger.error("❌ ERROR: RAILWAY_PUBLIC_DOMAIN tidak ditemukan. Pastikan deploy di Railway.")
@@ -387,7 +380,7 @@ async def main() -> None:
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Daftar command handlers
+    # Command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("carapakai", carapakai_command))
@@ -399,8 +392,7 @@ async def main() -> None:
     # Handler untuk @admin atau /adminchat
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & 
-            (filters.Regex(r"^@admin\s+") | filters.Regex(r"^/adminchat\s+")),
+            filters.TEXT & ~filters.COMMAND & (filters.Regex(r"^@admin\s+") | filters.Regex(r"^/adminchat\s+")),
             admin_chat_handler
         )
     )
